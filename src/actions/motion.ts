@@ -4,7 +4,7 @@ import { ChangeOperator, DeleteOperator, YankOperator } from './operator';
 import { CursorMoveByUnit, CursorMovePosition, TextEditor } from './../textEditor';
 import { Mode } from './../mode/mode';
 import { PairMatcher } from './../common/matching/matcher';
-import { Position, PositionDiff } from './../common/motion/position';
+import { Position } from './../common/motion/position';
 import { QuoteMatcher } from './../common/matching/quoteMatcher';
 import { RegisterAction } from './base';
 import { RegisterMode } from './../register/register';
