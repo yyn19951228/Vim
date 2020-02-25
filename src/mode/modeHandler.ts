@@ -151,10 +151,6 @@ export class ModeHandler implements vscode.Disposable {
       return;
     }
 
-    if (this.vimState.isMultiCursor && e.selections.length === 1) {
-      this.vimState.isMultiCursor = false;
-    }
-
     if (
       this.vimState.currentMode === Mode.SearchInProgressMode ||
       this.vimState.currentMode === Mode.CommandlineInProgress

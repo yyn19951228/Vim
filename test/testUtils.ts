@@ -76,6 +76,9 @@ export async function WaitForEditorsToClose(numExpectedEditors: number = 0): Pro
   }
 }
 
+/**
+ * Asserts that the contents of the active editor matches what's given
+ */
 export function assertEqualLines(expectedLines: string[]) {
   for (let i = 0; i < expectedLines.length; i++) {
     const expected = expectedLines[i];

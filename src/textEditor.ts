@@ -132,6 +132,10 @@ export class TextEditor {
     return vscode.window.activeTextEditor!.selection;
   }
 
+  static getSelections(): vscode.Range[] {
+    return vscode.window.activeTextEditor!.selections;
+  }
+
   static getText(selection?: vscode.Range): string {
     return vscode.window.activeTextEditor!.document.getText(selection);
   }
