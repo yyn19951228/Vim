@@ -20,6 +20,7 @@ import { reportSearch } from '../util/statusBarTextUtils';
 import { SneakForward, SneakBackward } from './plugins/sneak';
 import { Notation } from '../configuration/notation';
 import { SearchDirection } from '../state/searchState';
+import { StatusBar } from '../statusBar';
 
 /**
  * A movement is something like 'h', 'k', 'w', 'b', 'gg', etc.
@@ -225,12 +226,12 @@ class MoveDown extends BaseMovement {
     if (configuration.foldfix && vimState.currentMode !== Mode.VisualBlock) {
       return new MoveDownFoldFix().execAction(position, vimState);
     }
-    return position.getDown(vimState.desiredColumn);
+    return position.getDownWithDesiredColumn(vimState.desiredColumn);
   }
 
   public async execActionForOperator(position: Position, vimState: VimState): Promise<Position> {
     vimState.currentRegisterMode = RegisterMode.LineWise;
-    return position.getDown(position.getLineEnd().character);
+    return position.getDownWithDesiredColumn(position.getLineEnd().character);
   }
 }
 
@@ -250,12 +251,12 @@ class MoveUp extends BaseMovement {
     if (configuration.foldfix && vimState.currentMode !== Mode.VisualBlock) {
       return new MoveUpFoldFix().execAction(position, vimState);
     }
-    return position.getUp(vimState.desiredColumn);
+    return position.getUpWithDesiredColumn(vimState.desiredColumn);
   }
 
   public async execActionForOperator(position: Position, vimState: VimState): Promise<Position> {
     vimState.currentRegisterMode = RegisterMode.LineWise;
-    return position.getUp(position.getLineEnd().character);
+    return position.getUpWithDesiredColumn(position.getLineEnd().character);
   }
 }
 
@@ -351,12 +352,16 @@ class CommandNextSearchMatch extends BaseMovement {
       return position;
     }
 
-    if (searchState.matchRanges.length === 0) {
-      throw VimError.fromCode(ErrorCode.PatternNotFound, searchState.searchString);
-    }
-
     // Turn one of the highlighting flags back on (turned off with :nohl)
     globalState.hl = true;
+
+    if (searchState.matchRanges.length === 0) {
+      StatusBar.displayError(
+        vimState,
+        VimError.fromCode(ErrorCode.PatternNotFound, searchState.searchString)
+      );
+      return position;
+    }
 
     let nextMatch:
       | {
@@ -371,11 +376,15 @@ class CommandNextSearchMatch extends BaseMovement {
     }
 
     if (!nextMatch) {
-      throw VimError.fromCode(
-        searchState.searchDirection === SearchDirection.Forward
-          ? ErrorCode.SearchHitBottom
-          : ErrorCode.SearchHitTop
+      StatusBar.displayError(
+        vimState,
+        VimError.fromCode(
+          searchState.searchDirection === SearchDirection.Forward
+            ? ErrorCode.SearchHitBottom
+            : ErrorCode.SearchHitTop
+        )
       );
+      return position;
     }
 
     reportSearch(nextMatch.index, searchState.matchRanges.length, vimState);
@@ -396,21 +405,29 @@ class CommandPreviousSearchMatch extends BaseMovement {
       return position;
     }
 
-    if (searchState.matchRanges.length === 0) {
-      throw VimError.fromCode(ErrorCode.PatternNotFound, searchState.searchString);
-    }
-
     // Turn one of the highlighting flags back on (turned off with :nohl)
     globalState.hl = true;
+
+    if (searchState.matchRanges.length === 0) {
+      StatusBar.displayError(
+        vimState,
+        VimError.fromCode(ErrorCode.PatternNotFound, searchState.searchString)
+      );
+      return position;
+    }
 
     const prevMatch = searchState.getNextSearchMatchPosition(position, -1);
 
     if (!prevMatch) {
-      throw VimError.fromCode(
-        searchState.searchDirection === SearchDirection.Forward
-          ? ErrorCode.SearchHitTop
-          : ErrorCode.SearchHitBottom
+      StatusBar.displayError(
+        vimState,
+        VimError.fromCode(
+          searchState.searchDirection === SearchDirection.Forward
+            ? ErrorCode.SearchHitTop
+            : ErrorCode.SearchHitBottom
+        )
       );
+      return position;
     }
 
     reportSearch(prevMatch.index, searchState.matchRanges.length, vimState);
@@ -438,7 +455,7 @@ export class MarkMovementBOL extends BaseMovement {
       await ensureEditorIsActive(mark.editor);
     }
 
-    return mark.position.getFirstLineNonBlankChar();
+    return TextEditor.getFirstNonWhitespaceCharOnLine(mark.position.line);
   }
 }
 
@@ -547,7 +564,7 @@ class MoveDownNonBlank extends BaseMovement {
     count: number
   ): Promise<Position | IMovement> {
     vimState.currentRegisterMode = RegisterMode.LineWise;
-    return position.getDownByCount(Math.max(count, 1)).getFirstLineNonBlankChar();
+    return TextEditor.getFirstNonWhitespaceCharOnLine(position.getDown(Math.max(count, 1)).line);
   }
 }
 
@@ -561,7 +578,7 @@ class MoveUpNonBlank extends BaseMovement {
     count: number
   ): Promise<Position | IMovement> {
     vimState.currentRegisterMode = RegisterMode.LineWise;
-    return position.getUpByCount(Math.max(count, 1)).getFirstLineNonBlankChar();
+    return TextEditor.getFirstNonWhitespaceCharOnLine(position.getUp(Math.max(count, 1)).line);
   }
 }
 
@@ -574,7 +591,9 @@ class MoveDownUnderscore extends BaseMovement {
     vimState: VimState,
     count: number
   ): Promise<Position | IMovement> {
-    return position.getDownByCount(Math.max(count - 1, 0)).getFirstLineNonBlankChar();
+    return TextEditor.getFirstNonWhitespaceCharOnLine(
+      position.getDown(Math.max(count - 1, 0)).line
+    );
   }
 }
 
@@ -589,6 +608,37 @@ class MoveToColumn extends BaseMovement {
   ): Promise<Position | IMovement> {
     return new Position(position.line, Math.max(0, count - 1));
   }
+}
+
+/**
+ * Returns the Postion of the next instance of `char` on the line
+ * @param char character to look for
+ * @param count number of times to look
+ * @param direction direction to look in
+ */
+function findHelper(
+  start: Position,
+  char: string,
+  count: number,
+  direction: 'forward' | 'backward'
+): Position | undefined {
+  const line = TextEditor.getLineAt(start);
+
+  let index = start.character;
+  while (count > 0 && index >= 0) {
+    if (direction === 'forward') {
+      index = line.text.indexOf(char, index + 1);
+    } else {
+      index = line.text.lastIndexOf(char, index - 1);
+    }
+    count--;
+  }
+
+  if (index >= 0) {
+    return new Position(start.line, index);
+  }
+
+  return undefined;
 }
 
 @RegisterAction
@@ -614,7 +664,7 @@ class MoveFindForward extends BaseMovement {
 
     count = count || 1;
     const toFind = Notation.ToControlCharacter(this.keysPressed[1]);
-    let result = position.findForwards(toFind, count);
+    let result = findHelper(position, toFind, count, 'forward');
 
     vimState.lastSemicolonRepeatableMovement = new MoveFindForward(this.keysPressed, true);
     vimState.lastCommaRepeatableMovement = new MoveFindBackward(this.keysPressed, true);
@@ -650,7 +700,7 @@ class MoveFindBackward extends BaseMovement {
 
     count = count || 1;
     const toFind = Notation.ToControlCharacter(this.keysPressed[1]);
-    let result = position.findBackwards(toFind, count);
+    let result = findHelper(position, toFind, count, 'backward');
 
     vimState.lastSemicolonRepeatableMovement = new MoveFindBackward(this.keysPressed, true);
     vimState.lastCommaRepeatableMovement = new MoveFindForward(this.keysPressed, true);
@@ -661,6 +711,16 @@ class MoveFindBackward extends BaseMovement {
 
     return result;
   }
+}
+
+function tilHelper(
+  start: Position,
+  char: string,
+  count: number,
+  direction: 'forward' | 'backward'
+) {
+  const result = findHelper(start, char, count, direction);
+  return direction === 'forward' ? result?.getLeft() : result?.getRight();
 }
 
 @RegisterAction
@@ -674,11 +734,11 @@ class MoveTilForward extends BaseMovement {
   ): Promise<Position | IMovement> {
     count = count || 1;
     const toFind = Notation.ToControlCharacter(this.keysPressed[1]);
-    let result = position.tilForwards(toFind, count);
+    let result = tilHelper(position, toFind, count, 'forward');
 
     // For t<character> vim executes ; as 2; and , as 2,
     if (result && this.isRepeat && position.isEqual(result) && count === 1) {
-      result = position.tilForwards(toFind, 2);
+      result = tilHelper(position, toFind, 2, 'forward');
     }
 
     vimState.lastSemicolonRepeatableMovement = new MoveTilForward(this.keysPressed, true);
@@ -707,11 +767,11 @@ class MoveTilBackward extends BaseMovement {
   ): Promise<Position | IMovement> {
     count = count || 1;
     const toFind = Notation.ToControlCharacter(this.keysPressed[1]);
-    let result = position.tilBackwards(toFind, count);
+    let result = tilHelper(position, toFind, count, 'backward');
 
     // For T<character> vim executes ; as 2; and , as 2,
     if (result && this.isRepeat && position.isEqual(result) && count === 1) {
-      result = position.tilBackwards(toFind, 2);
+      result = tilHelper(position, toFind, 2, 'backward');
     }
 
     vimState.lastSemicolonRepeatableMovement = new MoveTilBackward(this.keysPressed, true);
@@ -777,7 +837,7 @@ class MoveLineEnd extends BaseMovement {
     vimState: VimState,
     count: number
   ): Promise<Position | IMovement> {
-    return position.getDownByCount(Math.max(count - 1, 0)).getLineEnd();
+    return position.getDown(Math.max(count - 1, 0)).getLineEnd();
   }
 }
 
@@ -832,12 +892,12 @@ class MoveScreenLineEndNonBlank extends MoveByScreenLine {
 
     // If in visual, return a selection
     if (pos instanceof Position) {
-      return pos.getDownByCount(count - 1);
+      return pos.getDown(count - 1);
     } else if (isIMovement(pos)) {
-      return { start: pos.start, stop: pos.stop.getDownByCount(count - 1).getLeft() };
+      return { start: pos.start, stop: pos.stop.getDown(count - 1).getLeft() };
     }
 
-    return newPos.getDownByCount(count - 1);
+    return newPos.getDown(count - 1);
   }
 }
 
@@ -912,12 +972,12 @@ class MoveUpByScreenLineVisualBlock extends BaseMovement {
   }
 
   public async execAction(position: Position, vimState: VimState): Promise<Position | IMovement> {
-    return position.getUp(vimState.desiredColumn);
+    return position.getUpWithDesiredColumn(vimState.desiredColumn);
   }
 
   public async execActionForOperator(position: Position, vimState: VimState): Promise<Position> {
     vimState.currentRegisterMode = RegisterMode.LineWise;
-    return position.getUp(position.getLineEnd().character);
+    return position.getUpWithDesiredColumn(position.getLineEnd().character);
   }
 }
 
@@ -933,12 +993,12 @@ class MoveDownByScreenLineVisualBlock extends BaseMovement {
   }
 
   public async execAction(position: Position, vimState: VimState): Promise<Position | IMovement> {
-    return position.getDown(vimState.desiredColumn);
+    return position.getDownWithDesiredColumn(vimState.desiredColumn);
   }
 
   public async execActionForOperator(position: Position, vimState: VimState): Promise<Position> {
     vimState.currentRegisterMode = RegisterMode.LineWise;
-    return position.getDown(position.getLineEnd().character);
+    return position.getDownWithDesiredColumn(position.getLineEnd().character);
   }
 }
 
@@ -1056,7 +1116,7 @@ class MoveNonBlank extends BaseMovement {
   keys = ['^'];
 
   public async execAction(position: Position, vimState: VimState): Promise<Position> {
-    return position.getFirstLineNonBlankChar();
+    return TextEditor.getFirstNonWhitespaceCharOnLine(position.line);
   }
 }
 
@@ -1076,7 +1136,7 @@ class MoveNextLineNonBlank extends BaseMovement {
       count++;
     }
 
-    return position.getDownByCount(count).getFirstLineNonBlankChar();
+    return TextEditor.getFirstNonWhitespaceCharOnLine(position.getDown(count).line);
   }
 }
 
@@ -1091,7 +1151,7 @@ class MoveNonBlankFirst extends BaseMovement {
     count: number
   ): Promise<Position | IMovement> {
     if (count === 0) {
-      return position.getDocumentBegin().obeyStartOfLine();
+      return TextEditor.getDocumentBegin().obeyStartOfLine();
     } else if (count > TextEditor.getLineCount()) {
       count = TextEditor.getLineCount();
     }
@@ -1369,10 +1429,34 @@ abstract class MoveSectionBoundary extends BaseMovement {
   isJump = true;
 
   public async execAction(position: Position, vimState: VimState): Promise<Position> {
-    return position.getSectionBoundary({
-      forward: this.forward,
-      boundary: this.boundary,
-    });
+    if (
+      (this.forward && position.line === TextEditor.getLineCount() - 1) ||
+      (!this.forward && position.line === 0)
+    ) {
+      return TextEditor.getFirstNonWhitespaceCharOnLine(position.line);
+    }
+
+    position = this.forward
+      ? position.getDownWithDesiredColumn(0)
+      : position.getUpWithDesiredColumn(0);
+
+    while (!TextEditor.getLineAt(position).text.startsWith(this.boundary)) {
+      if (this.forward) {
+        if (position.line === TextEditor.getLineCount() - 1) {
+          break;
+        }
+
+        position = position.getDownWithDesiredColumn(0);
+      } else {
+        if (position.line === 0) {
+          break;
+        }
+
+        position = position.getUpWithDesiredColumn(0);
+      }
+    }
+
+    return TextEditor.getFirstNonWhitespaceCharOnLine(position.line);
   }
 }
 
@@ -1475,7 +1559,8 @@ class MoveToMatchingBracket extends BaseMovement {
       }
 
       const targetLine = Math.round((count * TextEditor.getLineCount()) / 100);
-      return new Position(targetLine - 1, 0).getFirstLineNonBlankChar();
+
+      return TextEditor.getFirstNonWhitespaceCharOnLine(targetLine - 1);
     } else {
       return super.execActionWithCount(position, vimState, count);
     }

@@ -36,6 +36,7 @@ VSCodeVim is a Vim emulator for [Visual Studio Code](https://code.visualstudio.c
   - [CamelCaseMotion](#camelcasemotion)
   - [Input Method](#input-method)
   - [ReplaceWithRegister](#replacewithregister)
+  - [vim-textobj-entire](#vim-textobj-entire)
 - [VSCodeVim tricks](#-vscodevim-tricks)
 - [F.A.Q / Troubleshooting](#-faq)
 - [Contributing](#️-contributing)
@@ -611,6 +612,21 @@ Once active, type `gr` (say "go replace") followed by a motion to describe the t
 | `[count]["a]grr`        | Replace the \[count\] lines or current line with the contents of the specified register |
 | `{Visual}["a]gr`        | Replace the selection with the contents of the specified register                       |
 
+### vim-textobj-entire
+
+Similar to [vim-textobj-entire](https://github.com/kana/vim-textobj-entire).
+
+Adds two useful text-objects:
+
+- `ae` which represents the entire content of a buffer.
+- `ie` which represents the entire content of a buffer without the leading and trailing spaces.
+
+Usage examples:
+
+- `dae` - delete the whole buffer content.
+- `yie` - will yank the buffer content except leading and trailing blank lines.
+- `gUae` - transform the whole buffer to uppercase.
+
 ## 🎩 VSCodeVim tricks!
 
 VS Code has a lot of nifty tricks and we try to preserve some of them:
@@ -690,6 +706,10 @@ VS Code has a lot of nifty tricks and we try to preserve some of them:
   ```
 
   **Caveats:** This solution restores the default VS Code behavior for the <kbd>j</kbd> and <kbd>k</kbd> keys, so motions like `10j` [will not work](https://github.com/VSCodeVim/Vim/pull/3623#issuecomment-481473981). If you need these motions to work, [other, less performant options exist](https://github.com/VSCodeVim/Vim/issues/2924#issuecomment-476121848).
+
+- I've swapped Escape and Caps Lock with setxkbmap and VSCodeVim isn't respecting the swap
+
+  This is a [known issue in VS Code](https://github.com/microsoft/vscode/issues/23991), as a workaround you can set `"keyboard.dispatch": "keycode"` and restart VS Code.
 
 ## ❤️ Contributing
 

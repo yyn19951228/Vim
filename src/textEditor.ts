@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 
 import { Position } from './common/motion/position';
 import { configuration } from './configuration/configuration';
+import { VimState } from './state/vimState';
+import { visualBlockGetTopLeftPosition, visualBlockGetBottomRightPosition } from './mode/mode';
+import { Range } from './common/motion/range';
 
 /**
  * Collection of helper functions around vscode.window.activeTextEditor
@@ -43,7 +46,7 @@ export class TextEditor {
     if (!letVSCodeHandleKeystrokes) {
       // const selections = vscode.window.activeTextEditor!.selections.slice(0);
 
-      await vscode.window.activeTextEditor!.edit(editBuilder => {
+      await vscode.window.activeTextEditor!.edit((editBuilder) => {
         if (!at) {
           at = Position.FromVSCodePosition(vscode.window.activeTextEditor!.selection.active);
         }
@@ -62,7 +65,7 @@ export class TextEditor {
    * @deprecated Use InsertTextTransformation (or InsertTextVSCodeTransformation) instead.
    */
   static async insertAt(text: string, position: vscode.Position): Promise<boolean> {
-    return vscode.window.activeTextEditor!.edit(editBuilder => {
+    return vscode.window.activeTextEditor!.edit((editBuilder) => {
       editBuilder.insert(position, text);
     });
   }
@@ -71,7 +74,7 @@ export class TextEditor {
    * @deprecated Use DeleteTextTransformation or DeleteTextRangeTransformation instead.
    */
   static async delete(range: vscode.Range): Promise<boolean> {
-    return vscode.window.activeTextEditor!.edit(editBuilder => {
+    return vscode.window.activeTextEditor!.edit((editBuilder) => {
       editBuilder.delete(range);
     });
   }
@@ -88,7 +91,7 @@ export class TextEditor {
    * @deprecated. Use ReplaceTextTransformation instead.
    */
   static async replace(range: vscode.Range, text: string): Promise<boolean> {
-    return vscode.window.activeTextEditor!.edit(editBuilder => {
+    return vscode.window.activeTextEditor!.edit((editBuilder) => {
       editBuilder.replace(range, text);
     });
   }
@@ -116,6 +119,10 @@ export class TextEditor {
     }
 
     return TextEditor.readLineAt(line).length;
+  }
+
+  static getLine(lineNumber: number): vscode.TextLine {
+    return vscode.window.activeTextEditor!.document.lineAt(lineNumber);
   }
 
   static getLineAt(position: vscode.Position): vscode.TextLine {
@@ -181,11 +188,8 @@ export class TextEditor {
   static getIndentationLevel(line: string): number {
     let tabSize = configuration.tabstop;
 
-    let firstNonWhiteSpace = 0;
-    let checkLine = line.match(/^\s*/);
-    if (checkLine) {
-      firstNonWhiteSpace = checkLine[0].length;
-    }
+    const lineCheck = line.match(/^\s*/);
+    const firstNonWhiteSpace = lineCheck ? lineCheck[0].length : 0;
 
     let visibleColumn: number = 0;
 
@@ -211,15 +215,13 @@ export class TextEditor {
 
   static setIndentationLevel(line: string, screenCharacters: number): string {
     let tabSize = configuration.tabstop;
-    let insertTabAsSpaces = configuration.expandtab;
 
     if (screenCharacters < 0) {
       screenCharacters = 0;
     }
 
     let indentString = '';
-
-    if (insertTabAsSpaces) {
+    if (configuration.expandtab) {
       indentString += new Array(screenCharacters + 1).join(' ');
     } else {
       if (screenCharacters / tabSize > 0) {
@@ -229,11 +231,8 @@ export class TextEditor {
       indentString += new Array((screenCharacters % tabSize) + 1).join(' ');
     }
 
-    let firstNonWhiteSpace = 0;
-    let lineCheck = line.match(/^\s*/);
-    if (lineCheck) {
-      firstNonWhiteSpace = lineCheck[0].length;
-    }
+    const lineCheck = line.match(/^\s*/);
+    const firstNonWhiteSpace = lineCheck ? lineCheck[0].length : 0;
 
     return indentString + line.substring(firstNonWhiteSpace, line.length);
   }
@@ -245,6 +244,93 @@ export class TextEditor {
 
   static getOffsetAt(position: Position): number {
     return vscode.window.activeTextEditor!.document.offsetAt(position);
+  }
+
+  static getDocumentBegin(): Position {
+    return new Position(0, 0);
+  }
+
+  static getDocumentEnd(textEditor?: vscode.TextEditor): Position {
+    const lineCount = TextEditor.getLineCount(textEditor);
+    const line = lineCount > 0 ? lineCount - 1 : 0;
+    const char = TextEditor.getLineLength(line);
+
+    return new Position(line, char);
+  }
+
+  /**
+   * @returns the Position of the first character on the given line which is not whitespace.
+   */
+  public static getFirstNonWhitespaceCharOnLine(line: number): Position {
+    return new Position(line, TextEditor.readLineAt(line).match(/^\s*/)![0].length);
+  }
+
+  /**
+   * Iterate over every line in the block defined by the two positions (Range) passed in.
+   * If no range is given, the primary cursor will be used as the block.
+   *
+   * This is intended for visual block mode.
+   */
+  public static *iterateLinesInBlock(
+    vimState: VimState,
+    range?: Range,
+    options: { reverse?: boolean } = { reverse: false }
+  ): Iterable<{ line: string; start: Position; end: Position }> {
+    const { reverse } = options;
+
+    if (range === undefined) {
+      range = vimState.cursors[0];
+    }
+
+    const topLeft = visualBlockGetTopLeftPosition(range.start, range.stop);
+    const bottomRight = visualBlockGetBottomRightPosition(range.start, range.stop);
+
+    const [itrStart, itrEnd] = reverse
+      ? [bottomRight.line, topLeft.line]
+      : [topLeft.line, bottomRight.line];
+
+    const runToLineEnd = vimState.desiredColumn === Number.POSITIVE_INFINITY;
+
+    for (
+      let lineIndex = itrStart;
+      reverse ? lineIndex >= itrEnd : lineIndex <= itrEnd;
+      reverse ? lineIndex-- : lineIndex++
+    ) {
+      const line = TextEditor.getLine(lineIndex).text;
+      const endCharacter = runToLineEnd
+        ? line.length + 1
+        : Math.min(line.length, bottomRight.character + 1);
+
+      yield {
+        line: line.substring(topLeft.character, endCharacter),
+        start: new Position(lineIndex, topLeft.character),
+        end: new Position(lineIndex, endCharacter),
+      };
+    }
+  }
+
+  /**
+   * Iterates through words on the same line, starting from the current position.
+   */
+  public static *iterateWords(
+    start: Position
+  ): Iterable<{ start: Position; end: Position; word: string }> {
+    const text = TextEditor.getLineAt(start).text;
+    let wordEnd = start.getCurrentWordEnd(true);
+    do {
+      const word = text.substring(start.character, wordEnd.character + 1);
+      yield {
+        start: start,
+        end: wordEnd,
+        word: word,
+      };
+
+      if (wordEnd.getRight().isLineEnd()) {
+        return;
+      }
+      start = start.getWordRight();
+      wordEnd = start.getCurrentWordEnd(true);
+    } while (true);
   }
 }
 
